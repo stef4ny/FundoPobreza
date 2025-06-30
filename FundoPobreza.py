@@ -1,21 +1,40 @@
 import pyodbc
 import logging
 import time
-import sys
 import tkinter as tk
+import datetime
 from tkinter import scrolledtext, messagebox, ttk
-import pandas as pd 
+from ttkthemes import ThemedTk # Mantém ThemedTk para o visual
 import os
-import smtplib      
+import pandas as pd
+import smtplib # Importado para envio de email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 
+# --- Configuração Global ---
+INTERVALO_CONSULTA_MS = 20 * 60 * 1000
+INTERVALO_ATUALIZACAO_MS = 1000 # Usei esse nome para ser consistente com o nome anterior
 
-INTERVALO_CONSULTA_MS = 1 * 60 * 1000 
+# Variáveis globais para controle e agendamento da execução
+consulta_agendada_id = None
+contador_agendado_id = None
+executando_consultas = False # Variável de controle de estado (iniciado/parado)
 
-INTERVALO_CONTADOR_MS = 1000
+# --- CONFIGURAÇÕES DE E-MAIL ---
+EMAIL_REMETENTE = 'rodriguestefany98@gmail.com' # Email do remetente (do seu último exemplo)
+SENHA_APLICATIVO_GMAIL = 'wqlf ylft acow dmsa' # Senha de aplicativo do remetente (do seu último exemplo)
+EMAIL_DESTINATARIO = 'stefany.rodrigues@nagem.com.br, felipe.amaral@nagem.com.br, wedici.lins@nagem.com.br ' # E-mail do destinatário
+# ASSUNTO_EMAIL: Será definido como "Alerta Pobreza - Notas com Erro 815"
+CORPO_EMAIL_FIXO = """
+Prezado(a),
+
+Este é um relatório automático do sistema de monitoramento de Alerta Pobreza.
+Na última consulta, foram encontrados os seguintes resultados:
+
+"""
+DIRETORIO_RELATORIOS = "relatorios" # Nome da pasta para salvar os relatórios
 
 # Configuração de log
 logging.basicConfig(
@@ -24,14 +43,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-
-EMAIL_REMETENTE = 'rodriguestefany98@gmail.com' 
-SENHA_REMETENTE = 'wqlf ylft acow dmsa'             
-EMAIL_DESTINATARIO = 'felipe.amaral@nagem.com.br' 
-SMTP_SERVER = 'smtp.example.com'         
-SMTP_PORT = 587                           
-
-
+# --- Função de Conexão com Banco de Dados ---
 def conectdb():
     try:
         conexao = pyodbc.connect(
@@ -47,64 +59,165 @@ def conectdb():
         logging.error(f"Erro ao conectar no banco: {e}")
         return None
 
+# --- Função para Gerar Relatório TXT ---
+def gerar_relatorio_txt(conteudo_relatorio_txt, output_widget):
+    if not os.path.exists(DIRETORIO_RELATORIOS):
+        os.makedirs(DIRETORIO_RELATORIOS)
 
-def enviar_email_alerta(conteudo, csv_filename=None):
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    nome_arquivo = f"alerta_pobreza_relatorio_{timestamp}.txt"
+    caminho_arquivo = os.path.join(DIRETORIO_RELATORIOS, nome_arquivo)
+
     try:
-        print("Preparando e-mail...")
+        with open(caminho_arquivo, "w", encoding="utf-8") as f:
+            f.write(conteudo_relatorio_txt)
+        output_widget.insert(tk.END, f"Relatório TXT '{nome_arquivo}' gerado com sucesso em '{DIRETORIO_RELATORIOS}'.\n")
+        logging.info(f"Relatório TXT gerado: {caminho_arquivo}")
+        return caminho_arquivo
+    except Exception as e:
+        output_widget.insert(tk.END, f"Erro ao gerar relatório TXT: {e}\n")
+        logging.error(f"Erro ao gerar relatório TXT: {e}")
+        return None
+
+# --- Função para Gerar Relatório CSV ---
+def gerar_relatorio_csv(rows, columns, output_widget):
+    if not os.path.exists(DIRETORIO_RELATORIOS):
+        os.makedirs(DIRETORIO_RELATORIOS)
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    nome_arquivo_csv = f"alerta_pobreza_relatorio_{timestamp}.csv"
+    caminho_arquivo_csv = os.path.join(DIRETORIO_RELATORIOS, nome_arquivo_csv)
+
+    try:
+        processed_rows = [list(row) for row in rows] if rows else [] 
+        df = pd.DataFrame(processed_rows, columns=columns)
+        df.to_csv(caminho_arquivo_csv, index=False, encoding='utf-8', sep=';')
+        output_widget.insert(tk.END, f"Relatório CSV '{nome_arquivo_csv}' gerado com sucesso em '{DIRETORIO_RELATORIOS}'.\n")
+        logging.info(f"Relatório CSV gerado: {caminho_arquivo_csv}")
+        return caminho_arquivo_csv
+    except Exception as e:
+        output_widget.insert(tk.END, f"Erro ao gerar relatório CSV: {e}\n")
+        logging.error(f"Erro ao gerar relatório CSV: {e}")
+        return None
+
+# --- Nova Função para obter a saudação baseada na hora do dia ---
+def get_time_of_day_greeting():
+    current_hour = datetime.datetime.now().hour
+    if current_hour < 12:
+        return "Bom dia"
+    else:
+        return "Boa tarde"
+
+# --- Função para Enviar E-mail (usando smtplib) ---
+def enviar_email(anexos, conteudo_tabelado_para_email, output_widget): # Renomeei a variável para clareza
+    try:
         msg = MIMEMultipart()
         msg['From'] = EMAIL_REMETENTE
         msg['To'] = EMAIL_DESTINATARIO
-        msg['Subject'] = 'Alerta! ERRO 815'
+        msg['Subject'] = "Alerta Pobreza - Notas com Erro 815" # Assunto direto
 
-        corpo = f"\n\n\n\n Bom dia! 🍵  \n{conteudo}\n  UPDATE acima pronto para reprocessar. \n Atenciosamente,\n\n 🤖 Automação wRodaCupom."
-        msg.attach(MIMEText(corpo, 'plain'))
+        # Adiciona a saudação baseada na hora do dia e combina com o corpo fixo e o conteúdo tabelado
+        saudacao = get_time_of_day_greeting()
+        corpo_final_email = f"{saudacao},\n\n" + CORPO_EMAIL_FIXO + conteudo_tabelado_para_email + "\nAtenciosamente,\nSistema de Monitoramento"
+        msg.attach(MIMEText(corpo_final_email, 'plain'))
 
-        # Anexa o arquivo, se fornecido e existir
-        if csv_filename and os.path.exists(csv_filename):
-            with open(csv_filename, "rb") as attachment:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(attachment.read())
-            encoders.encode_base64(part)
-            part.add_header(
-                "Content-Disposition",
-                f"attachment; filename={os.path.basename(csv_filename)}",
-            )
-            msg.attach(part)
-            print(f"Arquivo {csv_filename} anexado ao e-mail.")
+        # Anexa os arquivos
+        for arquivo_path in anexos:
+            if os.path.exists(arquivo_path):
+                with open(arquivo_path, "rb") as attachment:
+                    part = MIMEBase("application", "octet-stream")
+                    part.set_payload(attachment.read())
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    f"attachment; filename={os.path.basename(arquivo_path)}",
+                )
+                msg.attach(part)
+                output_widget.insert(tk.END, f"Arquivo '{os.path.basename(arquivo_path)}' anexado ao e-mail.\n")
+            else:
+                output_widget.insert(tk.END, f"Aviso: Arquivo '{os.path.basename(arquivo_path)}' não encontrado para anexar.\n")
+                logging.warning(f"Arquivo não encontrado para anexar: {arquivo_path}")
 
-        print("Conectando ao servidor SMTP...")
+        # Conecta e envia o email
         with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            print("Logando no servidor SMTP...")
-            server.login(EMAIL_REMETENTE, SENHA_REMETENTE)
-            print("Enviando e-mail...")
+            server.starttls() # Inicia a criptografia TLS
+            server.login(EMAIL_REMETENTE, SENHA_APLICATIVO_GMAIL) # Use a senha de aplicativo aqui
             server.send_message(msg)
-        print("E-mail enviado com sucesso.")
+
+        output_widget.insert(tk.END, f"Email com relatório(s) enviado para '{EMAIL_DESTINATARIO}'.\n")
+        logging.info(f"Email enviado com anexo(s): {anexos}")
+        return True
+    except smtplib.SMTPAuthenticationError as auth_e:
+        output_widget.insert(tk.END, f"Erro de autenticação SMTP: Verifique remetente e senha de aplicativo. {auth_e}\n")
+        logging.error(f"Erro de autenticação SMTP: {auth_e}")
+        messagebox.showerror("Erro de Email", f"Erro de autenticação: {auth_e}. Verifique seu email remetente e a senha de aplicativo.")
+        return False
     except Exception as e:
-        print(f"Erro ao enviar e-mail: {e}")
-        logging.error(f"Erro ao enviar e-mail: {e}")
+        output_widget.insert(tk.END, f"Erro ao enviar email: {e}\n")
+        logging.error(f"Erro ao enviar email: {e}")
+        messagebox.showerror("Erro de Email", f"Não foi possível enviar o email. Verifique suas credenciais e conexão: {e}")
+        return False
 
+# --- Função para verificar se o horário atual está dentro do horário comercial ---
+def is_within_working_hours():
+    now = datetime.datetime.now()
+    is_weekday = 0 <= now.weekday() <= 4 # Segunda-feira (0) a Sexta-feira (4)
+    is_working_hour = 8 <= now.hour < 18 # Das 8h às 18h
+    return is_weekday and is_working_hour
 
-def executar_consulta_gui(output_widget, status_label, contador_label, progress_bar_query, root):
+# --- Função Principal - Executa Consulta e Atualiza a GUI ---
+def executar_consulta_gui(output_widget, status_label, contador_label, progress_bar_fill, root):
+    global consulta_agendada_id, contador_agendado_id, executando_consultas
+
+    if not executando_consultas:
+        return
+
+    # Verifica se está dentro do horário comercial antes de executar a consulta
+    if not is_within_working_hours():
+        msg = f"[{time.strftime('%H:%M:%S')}] Fora do horário comercial (Seg-Sex, 08h-18h). A consulta não será executada.\n"
+        output_widget.insert(tk.END, msg)
+        logging.info(msg.strip())
+        status_label.config(text="Status: Fora do horário comercial. Aguardando...")
+        
+        # Reagenda para o próximo intervalo, mesmo que não esteja executando consultas
+        root.after(INTERVALO_CONSULTA_MS, lambda: executar_consulta_gui(
+            output_widget, status_label, contador_label, progress_bar_fill, root
+        ))
+        # Inicia a atualização do contador para o próximo intervalo
+        root.after(INTERVALO_ATUALIZACAO_MS, lambda: atualizar_contador_e_barra(
+            contador_label, status_label, progress_bar_fill, root, INTERVALO_CONSULTA_MS
+        ))
+        return
+
     output_widget.delete(1.0, tk.END)
     status_label.config(text="Status: Iniciando consulta...")
-    progress_bar_query.start() # Inicia a animação da barra de progresso da query
-    contador_label.config(text="Próxima em: --:--") # Limpa o contador enquanto a consulta roda
+    
+    progress_bar_fill['value'] = 0
+    progress_bar_fill.stop()
+    
+    contador_label.config(text="Próximo em: --:--")
+
+    # Esta variável agora irá conter apenas o conteúdo tabelado para o e-mail
+    conteudo_tabelado_para_email = "" 
 
     try:
         conn = conectdb()
         if conn is None:
-            messagebox.showerror("Erro de Conexão", "Falha ao conectar com o banco de dados.")
-            output_widget.insert(tk.END, 'Falha na conexão com o banco.')
+            messagebox.showerror("Erro de Conexão", "Falha ao conectar ao banco de dados.")
+            output_widget.insert(tk.END, 'Falha ao conectar ao banco de dados.')
             status_label.config(text="Status: Conexão falhou.")
-            progress_bar_query.stop()
             return
-            
-        cursor = conn.cursor() 
-        output_widget.insert(tk.END, f'[{time.strftime("%H:%M:%S")}] Consulta de Alerta Pobreza iniciada...\n') 
-        status_label.config(text="Status: Executando query...")
+
+        cursor = conn.cursor()
         
-        t0 = time.time() 
+        # Mantém a mensagem de início da consulta no console/log
+        inicio_consulta_msg = f'[{time.strftime("%H:%M:%S")}] Consulta Alerta Pobreza iniciada...\n'
+        output_widget.insert(tk.END, inicio_consulta_msg)
+        logging.info(inicio_consulta_msg.strip())
+        
+        status_label.config(text="Status: Executando consulta...")
+
+        t0 = time.time()
         query = """
                     SELECT IDFEMP,DATEMS,NOTFIC,CODFIC,STAPRE
                     FROM CONOTD0M
@@ -112,138 +225,209 @@ def executar_consulta_gui(output_widget, status_label, contador_label, progress_
                       AND SUBSTR(DATEMS, 1, 6) = TO_CHAR(CURRENT DATE, 'YYYYMM')
                       AND STAPRE = '815'
                 """
-        
+
         cursor.execute(query)
-        
+
         columns = [column[0] for column in cursor.description]
         rows = cursor.fetchall()
-        
-        query_time = time.time() - t0
-        output_widget.insert(tk.END, f"Query executada em {query_time:.2f} segundos.\n")
-        output_widget.insert(tk.END, f"Total de linhas retornadas: {len(rows)}\n")
 
-        output_widget.insert(tk.END, "\n--- Resultados da Query ---\n")
+        query_time = time.time() - t0
+        
+        # Mantém a mensagem de tempo e linhas no console/log
+        tempo_linhas_msg = f"Consulta executada em {query_time:.2f} segundos.\nTotal de linhas retornadas: {len(rows)}\n"
+        output_widget.insert(tk.END, tempo_linhas_msg)
+        logging.info(tempo_linhas_msg.strip())
+
+        output_widget.insert(tk.END, "\n--- Resultados da Consulta ---\n")
+        
         if rows:
-            output_widget.insert(tk.END, " | ".join(columns) + "\n")
-            output_widget.insert(tk.END, "-" * (sum(len(c) for c in columns) + (len(columns) - 1) * 3) + "\n") 
+            header_line = " | ".join(columns) + "\n"
+            separator_line = "-" * (sum(len(c) for c in columns) + (len(columns) - 1) * 3) + "\n"
+            
+            output_widget.insert(tk.END, header_line)
+            output_widget.insert(tk.END, separator_line)
+            
+            # Adiciona cabeçalho e separador ao conteúdo do e-mail
+            conteudo_tabelado_para_email += header_line
+            conteudo_tabelado_para_email += separator_line
             
             for row in rows:
-                output_widget.insert(tk.END, " | ".join(map(str, row)) + "\n")
+                row_line = " | ".join(map(str, row)) + "\n"
+                output_widget.insert(tk.END, row_line)
+                # Adiciona cada linha de resultado ao conteúdo do e-mail
+                conteudo_tabelado_para_email += row_line
             
-            # --- Lógica para gerar Excel e enviar e-mail ---
-            if len(rows) > 0: # Envia e-mail apenas se houver resultados
-                df = pd.DataFrame(rows, columns=columns)
-                excel_filename = f"Alerta_Pobreza_{time.strftime('%Y%m%d_%H%M%S')}.xlsx"
-                
-                try:
-                    df.to_excel(excel_filename, index=False)
-                    logging.info(f"Arquivo Excel '{excel_filename}' gerado com sucesso.")
+            output_widget.insert(tk.END, "\nResultados encontrados. Gerando e enviando relatório(s)...\n")
+            
+            lista_anexos = []
+            
+            # Gera o relatório CSV (mantido do seu código original)
+            caminho_relatorio_csv = gerar_relatorio_csv(rows, columns, output_widget)
+            if caminho_relatorio_csv:
+                lista_anexos.append(caminho_relatorio_csv)
 
-                    assunto_email = "Alerta de Pobreza: Novos Registros Encontrados!"
-                    corpo_email = (
-                        f"Prezado(a),\n\n"
-                        f"Este é um alerta automático do sistema de monitoramento de pobreza.\n"
-                        f"Foram encontrados {len(rows)} novos registros que correspondem aos critérios de alerta.\n\n"
-                        f"Detalhes dos registros estão anexados neste e-mail no arquivo '{excel_filename}'.\n\n"
-                        f"Data e Hora da Consulta: {time.strftime('%d/%m/%Y %H:%M:%S')}\n\n"
-                        f"Atenciosamente,\n"
-                        f"Seu Sistema de Monitoramento"
-                    )
+            if lista_anexos:
+                # Envia o e-mail com o conteúdo tabelado
+                enviar_email(lista_anexos, conteudo_tabelado_para_email, output_widget)
+            else:
+                output_widget.insert(tk.END, "Nenhum arquivo de relatório foi gerado para envio.\n")
+                logging.warning("Nenhum arquivo de relatório foi gerado para envio por email.")
 
-                    if enviar_email_alerta(EMAIL_DESTINATARIO, assunto_email, corpo_email, excel_filename):
-                        output_widget.insert(tk.END, f"\nAlerta de e-mail enviado com o arquivo '{excel_filename}'.\n")
-                    else:
-                        output_widget.insert(tk.END, "\nFalha ao enviar e-mail de alerta.\n")
-
-                except Exception as e_excel_email:
-                    logging.error(f"Erro ao gerar Excel ou enviar e-mail: {e_excel_email}")
-                    output_widget.insert(tk.END, f"\nErro ao processar Excel/E-mail: {e_excel_email}\n")
-
-        else:
-            output_widget.insert(tk.END, "Nenhum resultado encontrado para a query.\n")
-            logging.info("Nenhum registro encontrado para alerta de pobreza.")
-
+        else: # Se não houver rows
+            nenhum_resultado_msg = "Nenhum resultado encontrado para a consulta.\n"
+            output_widget.insert(tk.END, nenhum_resultado_msg)
+            logging.info("Nenhum resultado encontrado. Nenhum relatório será gerado/enviado.")
+            # Se não houver resultados, o corpo do e-mail pode ser simplesmente uma mensagem de "nenhum resultado"
+            conteudo_tabelado_para_email = "Nenhum resultado com o erro 815 foi encontrado na consulta atual.\n"
+            enviar_email([], conteudo_tabelado_para_email, output_widget) # Envia email mesmo sem anexos se não houver erro
 
         cursor.close()
         conn.close()
-        logging.info("Conexão com o banco fechada.")
+        logging.info("Conexão com o banco de dados fechada.")
         status_label.config(text=f"Status: Consulta finalizada às {time.strftime('%H:%M:%S')}. {len(rows)} linhas encontradas.")
 
-    except Exception as e: 
+    except Exception as e:
         logging.error(f"Erro inesperado durante a consulta: {e}")
-        messagebox.showerror("Erro na Consulta", f"Ocorreu um erro: {e}")
-        output_widget.insert(tk.END, f"\n[{time.strftime('%H:%M:%S')}] Ocorreu um erro: {e}\n")
+        messagebox.showerror("Erro de Consulta", f"Ocorreu um erro: {e}")
+        error_msg = f"\n[{time.strftime('%H:%M:%S')}] Ocorreu um erro: {e}\n"
+        output_widget.insert(tk.END, error_msg)
+        # Adiciona a mensagem de erro ao corpo do e-mail, se ocorrer um erro na consulta
+        conteudo_tabelado_para_email = f"Ocorreu um erro durante a consulta: {e}\nPor favor, verifique o log para mais detalhes."
+        enviar_email([], conteudo_tabelado_para_email, output_widget) # Envia email com erro mesmo sem anexos
         status_label.config(text="Status: Erro na consulta.")
     finally:
-        progress_bar_query.stop() 
-        progress_bar_query['value'] = 0 
+        if executando_consultas: # Reagenda apenas se o monitoramento estiver ativo
+            progress_bar_fill['value'] = 0
+            root.after(INTERVALO_ATUALIZACAO_MS, lambda: atualizar_contador_e_barra(
+                contador_label, status_label, progress_bar_fill, root, INTERVALO_CONSULTA_MS
+            ))
+            consulta_agendada_id = root.after(INTERVALO_CONSULTA_MS, lambda: executar_consulta_gui(
+                output_widget, status_label, contador_label, progress_bar_fill, root
+            ))
 
-   
-    root.after(INTERVALO_CONTADOR_MS, lambda: atualizar_contador_tempo(
-        contador_label, status_label, root, INTERVALO_CONSULTA_MS
-    ))
-    
-    root.after(INTERVALO_CONSULTA_MS, lambda: executar_consulta_gui(
-        output_widget, status_label, contador_label, progress_bar_query, root
-    ))
+# --- Função para Atualizar Contador de Tempo e Barra de Progresso ---
+def atualizar_contador_e_barra(contador_label, status_label, progress_bar_fill, root, tempo_restante_ms):
+    global contador_agendado_id, executando_consultas
 
+    if not executando_consultas:
+        return
 
-def atualizar_contador_tempo(contador_label, status_label, root, tempo_restante_ms):
-    tempo_restante_ms -= INTERVALO_CONTADOR_MS
-    
-    
+    tempo_restante_ms -= INTERVALO_ATUALIZACAO_MS
+
     minutos = int(tempo_restante_ms / 1000 / 60)
     segundos = int((tempo_restante_ms / 1000) % 60)
 
+    # Calcula o valor da barra de progresso (de 0 a 100)
+    progress_value = ((INTERVALO_CONSULTA_MS - tempo_restante_ms) / INTERVALO_CONSULTA_MS) * 100
+    progress_bar_fill['value'] = progress_value
+
     if tempo_restante_ms > 0:
-        contador_label.config(text=f"Próxima em: {minutos:02d}:{segundos:02d}")
-       
-        root.after(INTERVALO_CONTADOR_MS, lambda: atualizar_contador_tempo(
-            contador_label, status_label, root, tempo_restante_ms
+        contador_label.config(text=f"Próximo em: {minutos:02d}:{segundos:02d}")
+        contador_agendado_id = root.after(INTERVALO_ATUALIZACAO_MS, lambda: atualizar_contador_e_barra(
+            contador_label, status_label, progress_bar_fill, root, tempo_restante_ms
         ))
     else:
-        contador_label.config(text="Próxima em: 00:00")
+        contador_label.config(text="Próximo em: 00:00")
         status_label.config(text="Status: Preparando nova consulta...")
-       
 
-def setup_gui():
-    root = tk.Tk()
-    root.title("Monitoramento de Alerta Pobreza")
-    root.geometry("900x700") 
+# --- Funções de Controle para Iniciar/Parar ---
+def iniciar_consultas(output_widget, status_label, contador_label, progress_bar_fill, root, btn_alternar):
+    global executando_consultas
+    if executando_consultas:
+        return
 
+    executando_consultas = True
+    btn_alternar.config(text="Parar Monitoramento")
+    status_label.config(text="Status: Monitoramento Iniciado. Agendando primeira consulta...")
+    output_widget.insert(tk.END, f'\n[{time.strftime("%H:%M:%S")}] Monitoramento Iniciado.\n')
     
-    control_frame = tk.Frame(root, padx=10, pady=10)
+    # Inicia a primeira execução e o contador
+    executar_consulta_gui(output_widget, status_label, contador_label, progress_bar_fill, root)
+
+def parar_consultas(root, btn_alternar, status_label, contador_label, progress_bar_fill, output_widget):
+    global consulta_agendada_id, contador_agendado_id, executando_consultas
+
+    if not executando_consultas:
+        return
+
+    executando_consultas = False
+    btn_alternar.config(text="Iniciar Monitoramento")
+    status_label.config(text="Status: Monitoramento Parado.")
+    output_widget.insert(tk.END, f'\n[{time.strftime("%H:%M:%S")}] Monitoramento Parado.\n')
+
+    # Cancela agendamentos pendentes
+    if consulta_agendada_id:
+        root.after_cancel(consulta_agendada_id)
+        consulta_agendada_id = None
+    if contador_agendado_id:
+        root.after_cancel(contador_agendado_id)
+        contador_agendado_id = None
+    
+    contador_label.config(text="Parado")
+    progress_bar_fill['value'] = 0
+    progress_bar_fill.stop()
+
+def alternar_monitoramento(output_widget, status_label, contador_label, progress_bar_fill, root, btn_alternar):
+    global executando_consultas
+    if executando_consultas:
+        parar_consultas(root, btn_alternar, status_label, contador_label, progress_bar_fill, output_widget)
+    else:
+        iniciar_consultas(output_widget, status_label, contador_label, progress_bar_fill, root, btn_alternar)
+
+# --- Função de Configuração da GUI ---
+def setup_gui():
+    root = ThemedTk(theme="black") # Mantém ThemedTk
+    root.title("Monitoramento Alerta Pobreza")
+    root.geometry("900x700")
+
+    fonte_padrao = ("Arial", 11)
+    fonte_contador = ("Consolas", 18, "bold")
+    fonte_resultado = ("Consolas", 10)
+
+    style = ttk.Style()
+    style.configure(".", font=fonte_padrao)
+    style.configure("TButton", padding=6)
+    style.map("TButton",
+              foreground=[('pressed', 'white'), ('active', 'lightblue')],
+              background=[('pressed', '!disabled', 'gray'), ('active', '#444444')])
+
+    style.configure("Horizontal.TProgressbar", background='lime green', troughcolor='darkgray', bordercolor='black')
+
+    control_frame = ttk.Frame(root, padding="10 10 10 10")
     control_frame.pack(side=tk.TOP, fill=tk.X)
 
-    
-    btn_buscar = tk.Button(control_frame, text="Forçar Consulta Agora", 
-                            command=lambda: executar_consulta_gui(resultado_text, status_label, contador_label, progress_bar_query, root))
-    btn_buscar.pack(side=tk.LEFT, padx=5)
+    # Botão para alternar monitoramento (Iniciar/Parar)
+    btn_alternar = ttk.Button(control_frame, text="Iniciar Monitoramento",
+                              command=lambda: alternar_monitoramento(resultado_text, status_label, contador_label, progress_bar_fill, root, btn_alternar))
+    btn_alternar.pack(side=tk.LEFT, padx=5)
 
-    
-    progress_bar_query = ttk.Progressbar(control_frame, orient="horizontal", length=150, mode="indeterminate")
-    progress_bar_query.pack(side=tk.LEFT, padx = 5)
-    
-    
-    contador_label = tk.Label(control_frame, text="Próxima em: --:--", font=("Arial", 14, "bold"), fg="darkgreen")
+    progress_bar_fill = ttk.Progressbar(control_frame, orient="horizontal", length=300, mode="determinate", style="Horizontal.TProgressbar")
+    progress_bar_fill.pack(side=tk.LEFT, padx=5)
+
+    contador_label = ttk.Label(control_frame, text="Próximo em: --:--", font=fonte_contador, foreground="lime green")
     contador_label.pack(side=tk.LEFT, padx=(20, 5))
 
-    
-    resultado_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, width = 100, height = 30, font = ("Consolas", 10))
+    resultado_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=100, height=30,
+                                               font=fonte_resultado,
+                                               bg="#333333",
+                                               fg="#FFFFFF",
+                                               insertbackground="white",
+                                               selectbackground="#444444")
     resultado_text.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
 
-    
-    status_label = tk.Label(root, text="Status: Aguardando consulta inicial...", bd=1, relief=tk.SUNKEN, anchor = tk.W)
+    status_label = ttk.Label(root, text="Status: Monitoramento Iniciado Automaticamente.", anchor=tk.W,
+                             relief=tk.SUNKEN,
+                             padding=(5, 2),
+                             background="#222222",
+                             foreground="lightgray")
     status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-    
-    root.update_idletasks() 
-    
-    
-    root.after(100, lambda: executar_consulta_gui(resultado_text, status_label, contador_label, progress_bar_query, root))
+    # --- Chamada para iniciar automaticamente ---
+    # Inicia o monitoramento logo após a GUI ser configurada
+    root.after(100, lambda: iniciar_consultas(resultado_text, status_label, contador_label, progress_bar_fill, root, btn_alternar))
     
     root.mainloop()
 
-
+# --- Bloco Principal - Inicia a GUI ---
 if __name__ == "__main__":
     setup_gui()
