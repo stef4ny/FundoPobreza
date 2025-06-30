@@ -1,0 +1,32 @@
+2025-06-27 09:43:35,429 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:43:41,343 - INFO - Conexão com o banco fechada.
+2025-06-27 09:48:46,073 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:48:46,095 - ERROR - Erro inesperado em alerta_pobreza: ('42S22', '[42S22] [IBM][iSeries Access ODBC Driver][DB2 UDB]SQL0206 - Column or global variable NOTIFIC not found. (-206) (SQLExecDirectW); [42S22] [IBM][iSeries Access ODBC Driver][DB2 UDB]SQL7973 - SQL create package for PYTHONVBA in QGPL has failed. (-204)')
+2025-06-27 09:49:46,108 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:49:46,119 - ERROR - Erro inesperado em alerta_pobreza: ('42S22', '[42S22] [IBM][iSeries Access ODBC Driver][DB2 UDB]SQL0206 - Column or global variable NOTIFIC not found. (-206) (SQLExecDirectW)')
+2025-06-27 09:50:46,130 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:50:46,137 - ERROR - Erro inesperado em alerta_pobreza: ('42S22', '[42S22] [IBM][iSeries Access ODBC Driver][DB2 UDB]SQL0206 - Column or global variable NOTIFIC not found. (-206) (SQLExecDirectW)')
+2025-06-27 09:50:53,527 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:50:55,436 - INFO - Conexão com o banco fechada.
+2025-06-27 09:51:55,442 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:51:57,333 - INFO - Conexão com o banco fechada.
+2025-06-27 09:52:57,341 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:52:58,767 - INFO - Conexão com o banco fechada.
+2025-06-27 09:53:58,776 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 09:54:00,149 - INFO - Conexão com o banco fechada.
+2025-06-27 10:06:08,507 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:06:10,073 - INFO - Conexão com o banco fechada.
+2025-06-27 10:07:10,085 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:07:11,423 - INFO - Conexão com o banco fechada.
+2025-06-27 10:08:11,434 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:08:12,937 - INFO - Conexão com o banco fechada.
+2025-06-27 10:09:12,945 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:09:14,437 - INFO - Conexão com o banco fechada.
+2025-06-27 10:10:14,451 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:10:15,888 - INFO - Conexão com o banco fechada.
+2025-06-27 10:11:15,897 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:11:17,219 - INFO - Conexão com o banco fechada.
+2025-06-27 10:12:17,229 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:12:18,523 - INFO - Conexão com o banco fechada.
+2025-06-27 10:13:18,534 - INFO - Conexão com o banco realizada com sucesso.
+2025-06-27 10:13:19,935 - INFO - Conexão com o banco fechada.
