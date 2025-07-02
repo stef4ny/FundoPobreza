@@ -23,9 +23,9 @@ contador_agendado_id = None
 executando_consultas = False # Variável de controle de estado (iniciado/parado)
 
 # --- CONFIGURAÇÕES DE E-MAIL ---
-EMAIL_REMETENTE = 'rodriguestefany98@gmail.com' # Email do remetente (do seu último exemplo)
-SENHA_APLICATIVO_GMAIL = 'wqlf ylft acow dmsa' # Senha de aplicativo do remetente (do seu último exemplo)
-EMAIL_DESTINATARIO = 'stefany.rodrigues@nagem.com.br, felipe.amaral@nagem.com.br, wedici.lins@nagem.com.br ' # E-mail do destinatário
+EMAIL_REMETENTE = 'XXXXXXXXXXXX@gmail.com' # Email do remetente (do seu último exemplo)
+SENHA_APLICATIVO_GMAIL = 'XXXX XXXX XXXX XXX' # Senha de aplicativo do remetente (do seu último exemplo)
+EMAIL_DESTINATARIO = 'XXXXXX@XXXX.com.br ' # E-mail do destinatário
 # ASSUNTO_EMAIL: Será definido como "Alerta Pobreza - Notas com Erro 815"
 CORPO_EMAIL_FIXO = """
 Prezado(a),
@@ -48,10 +48,10 @@ def conectdb():
     try:
         conexao = pyodbc.connect(
             'Driver={Client Access ODBC Driver (32-bit)};'
-            'System=10.1.0.2;'
-            'Uid=CLAUDIO;'
-            'Pwd=19957;'
-            'DefaultLibraries=NAG0001;'
+            'System=XX.XX.X;'
+            'Uid=XXXXX;'
+            'Pwd=XXXXXX;'
+            'DefaultLibraries=XXXXXXX;'
         )
         logging.info("Conexão com o banco realizada com sucesso.")
         return conexao
@@ -219,11 +219,11 @@ def executar_consulta_gui(output_widget, status_label, contador_label, progress_
 
         t0 = time.time()
         query = """
-                    SELECT IDFEMP,DATEMS,NOTFIC,CODFIC,STAPRE
-                    FROM CONOTD0M
+                    SELECT XXXXX,XXXXX,XXXXX,XXXXX,XXXXX
+                    FROM XXXXXX
                     WHERE 1=1
                       AND SUBSTR(DATEMS, 1, 6) = TO_CHAR(CURRENT DATE, 'YYYYMM')
-                      AND STAPRE = '815'
+                      AND XXXXX = 'XXX'
                 """
 
         cursor.execute(query)
