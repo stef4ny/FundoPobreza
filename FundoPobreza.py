@@ -1,433 +1,486 @@
 import pyodbc
 import logging
 import time
-import tkinter as tk
 import datetime
-from tkinter import scrolledtext, messagebox, ttk
-from ttkthemes import ThemedTk # Mantém ThemedTk para o visual
 import os
 import pandas as pd
-import smtplib # Importado para envio de email
+import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+import subprocess
+import platform
+import threading
+import sys
+from tkinter import messagebox
+import customtkinter as ctk
+from typing import List, Tuple, Optional, Dict, Any
+import winsound
+from emailBuilder import htmlEmailBody, send_email
+from functools import lru_cache
+from PIL import Image, ImageTk
+from config import INTERVALO_CONSULTA_MS
+GLOBAL_INTERVALO_CONSULTA_MS = INTERVALO_CONSULTA_MS 
 
-# --- Configuração Global ---
-INTERVALO_CONSULTA_MS = 20 * 60 * 1000
-INTERVALO_ATUALIZACAO_MS = 1000 # Usei esse nome para ser consistente com o nome anterior
 
-# Variáveis globais para controle e agendamento da execução
-consulta_agendada_id = None
-contador_agendado_id = None
-executando_consultas = False # Variável de controle de estado (iniciado/parado)
-
-# --- CONFIGURAÇÕES DE E-MAIL ---
-EMAIL_REMETENTE = 'XXXXXXXXXXXX@gmail.com' # Email do remetente (do seu último exemplo)
-SENHA_APLICATIVO_GMAIL = 'XXXX XXXX XXXX XXX' # Senha de aplicativo do remetente (do seu último exemplo)
-EMAIL_DESTINATARIO = 'XXXXXX@XXXX.com.br ' # E-mail do destinatário
-# ASSUNTO_EMAIL: Será definido como "Alerta Pobreza - Notas com Erro 815"
-CORPO_EMAIL_FIXO = """
-Prezado(a),
-
-Este é um relatório automático do sistema de monitoramento de Alerta Pobreza.
-Na última consulta, foram encontrados os seguintes resultados:
-
-"""
-DIRETORIO_RELATORIOS = "relatorios" # Nome da pasta para salvar os relatórios
-
-# Configuração de log
-logging.basicConfig(
-    filename='log_execucao_gui.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+from config import (
+    EMAIL_REMETENTE, SENHA_APPLICATIVO_GMAIL, EMAIL_DESTINATARIO,
+    ASSUNTO_EMAIL,  DIRETORIO_RELATORIOS, DIRETORIO_LOGS, CORPO_EMAIL_FIXO,
+    DB_DRIVER, DB_SYSTEM, DB_UID, DB_PWD, DB_DEFAULT_LIBRARIES,
+    INTERVALO_ATUALIZACAO_MS,
+    SQL_QUERY_ALERTA, #EMAIL_MAX_ROWS_DISPLAY,
+    WORKING_HOURS_START_HOUR, WORKING_HOURS_END_HOUR
 )
 
-# --- Função de Conexão com Banco de Dados ---
+@lru_cache(maxsize=32)
+def cached_conectdb():
+    return conectdb()
+
+@lru_cache(maxsize=32)
+def executar_consulta_cached(query: str, data_referencia: datetime.date):
+    conn = cached_conectdb()
+    cursor = conn.cursor()
+    cursor.execute(query)
+    return cursor.fetchall()
+
+class PaginatedResults:
+    def __init__(self, all_results, page_size=50):
+        self.all_results = all_results
+        self.page_size = page_size
+        self.current_page = 0
+        
+    def get_page(self, page_num):
+        start = page_num * self.page_size
+        end = start + self.page_size
+        return self.all_results[start:end]
+    
+    @property
+    def total_pages(self):
+        return len(self.all_results) // self.page_size + 1
+
+
+try:
+    from telinha import AppGUI, LogTextHandler, COLOR_TEXT_SUCCESS, COLOR_TEXT_ERROR, COLOR_TEXT_WARNING, COLOR_TEXT_PRIMARY
+except ImportError as e:
+   
+    temp_logger = logging.getLogger("temp_logger")
+    temp_logger.setLevel(logging.ERROR)
+    temp_handler = logging.StreamHandler(sys.stdout)
+    temp_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
+    temp_logger.addHandler(temp_handler)
+    temp_logger.error(f"Não foi possível importar AppGUI ou LogTextHandler de telinha.py: {e}")
+    sys.exit(1)
+
+
+if not os.path.exists(DIRETORIO_LOGS):
+    os.makedirs(DIRETORIO_LOGS)
+
+
+log_file_name = datetime.datetime.now().strftime(os.path.join(DIRETORIO_LOGS, "app_log_%Y-%m-%d.log"))
+
+
+app_logger = logging.getLogger(__name__)
+app_logger.setLevel(logging.INFO)
+
+formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+file_handler = logging.FileHandler(log_file_name, encoding='utf-8')
+file_handler.setFormatter(formatter)
+app_logger.addHandler(file_handler)
+
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setFormatter(formatter)
+app_logger.addHandler(stream_handler)
+
+
+consulta_agendada_id = None
+contador_agendado_id = None
+executando_consultas = False
+consulta_thread = None
+
+
+app_gui_instance = None
+
+
 def conectdb():
+    app_gui_instance.master.after(0, lambda: app_gui_instance.status_label.configure(text_color=COLOR_TEXT_WARNING, text="Status: Conectando ao banco de dados..."))
     try:
         conexao = pyodbc.connect(
-            'Driver={Client Access ODBC Driver (32-bit)};'
-            'System=XX.XX.X;'
-            'Uid=XXXXX;'
-            'Pwd=XXXXXX;'
-            'DefaultLibraries=XXXXXXX;'
+            f'Driver={DB_DRIVER};'
+            f'System={DB_SYSTEM};'
+            f'Uid={DB_UID};'
+            f'Pwd={DB_PWD};'
+            f'DefaultLibraries={DB_DEFAULT_LIBRARIES};'
         )
-        logging.info("Conexão com o banco realizada com sucesso.")
+        app_logger.info("Conexão com o banco realizada com sucesso.")
         return conexao
     except Exception as e:
-        logging.error(f"Erro ao conectar no banco: {e}")
+        app_logger.error(f"Erro ao conectar no banco: {e}", exc_info=True)
         return None
 
-# --- Função para Gerar Relatório TXT ---
-def gerar_relatorio_txt(conteudo_relatorio_txt, output_widget):
-    if not os.path.exists(DIRETORIO_RELATORIOS):
-        os.makedirs(DIRETORIO_RELATORIOS)
-
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    nome_arquivo = f"alerta_pobreza_relatorio_{timestamp}.txt"
-    caminho_arquivo = os.path.join(DIRETORIO_RELATORIOS, nome_arquivo)
-
-    try:
-        with open(caminho_arquivo, "w", encoding="utf-8") as f:
-            f.write(conteudo_relatorio_txt)
-        output_widget.insert(tk.END, f"Relatório TXT '{nome_arquivo}' gerado com sucesso em '{DIRETORIO_RELATORIOS}'.\n")
-        logging.info(f"Relatório TXT gerado: {caminho_arquivo}")
-        return caminho_arquivo
-    except Exception as e:
-        output_widget.insert(tk.END, f"Erro ao gerar relatório TXT: {e}\n")
-        logging.error(f"Erro ao gerar relatório TXT: {e}")
+def gerar_relatorio_csv(rows, columns):
+    if not rows:
+        app_logger.info("Não há dados para gerar o relatório CSV, Nenhum arquivo será criado.")  # só envia o arquivo .CSV se houver resultados.
         return None
 
-# --- Função para Gerar Relatório CSV ---
-def gerar_relatorio_csv(rows, columns, output_widget):
     if not os.path.exists(DIRETORIO_RELATORIOS):
-        os.makedirs(DIRETORIO_RELATORIOS)
-
+        os.makedirs(DIRETORIO_RELATORIOS) 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     nome_arquivo_csv = f"alerta_pobreza_relatorio_{timestamp}.csv"
     caminho_arquivo_csv = os.path.join(DIRETORIO_RELATORIOS, nome_arquivo_csv)
 
+    app_gui_instance.master.after(0, lambda: app_gui_instance.status_label.configure(text_color=COLOR_TEXT_WARNING, text="Status: Gerando relatório CSV..."))
     try:
-        processed_rows = [list(row) for row in rows] if rows else [] 
+        processed_rows = [list(row) for row in rows] if rows else []
         df = pd.DataFrame(processed_rows, columns=columns)
+
+       
+        if 'DATA' in df.columns:
+           
+            df['DATA'] = pd.to_datetime(df['DATA'], errors='coerce').dt.strftime('%d/%m/%y') 
+           
+            df['DATA'] = df['DATA'].fillna('')
+           
+            df['DATA'] = " " + df['DATA'].astype(str)
+
         df.to_csv(caminho_arquivo_csv, index=False, encoding='utf-8', sep=';')
-        output_widget.insert(tk.END, f"Relatório CSV '{nome_arquivo_csv}' gerado com sucesso em '{DIRETORIO_RELATORIOS}'.\n")
-        logging.info(f"Relatório CSV gerado: {caminho_arquivo_csv}")
+        app_logger.info(f"Relatório CSV '{nome_arquivo_csv}' gerado com sucesso em '{DIRETORIO_RELATORIOS}'.")
         return caminho_arquivo_csv
     except Exception as e:
-        output_widget.insert(tk.END, f"Erro ao gerar relatório CSV: {e}\n")
-        logging.error(f"Erro ao gerar relatório CSV: {e}")
+        app_logger.error(f"Erro ao gerar relatório CSV: {e}", exc_info=True)
         return None
 
-# --- Nova Função para obter a saudação baseada na hora do dia ---
-def get_time_of_day_greeting():
-    current_hour = datetime.datetime.now().hour
-    if current_hour < 12:
-        return "Bom dia"
-    else:
-        return "Boa tarde"
 
-# --- Função para Enviar E-mail (usando smtplib) ---
-def enviar_email(anexos, conteudo_tabelado_para_email, output_widget): # Renomeei a variável para clareza
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_REMETENTE
-        msg['To'] = EMAIL_DESTINATARIO
-        msg['Subject'] = "Alerta Pobreza - Notas com Erro 815" # Assunto direto
-
-        # Adiciona a saudação baseada na hora do dia e combina com o corpo fixo e o conteúdo tabelado
-        saudacao = get_time_of_day_greeting()
-        corpo_final_email = f"{saudacao},\n\n" + CORPO_EMAIL_FIXO + conteudo_tabelado_para_email + "\nAtenciosamente,\nSistema de Monitoramento"
-        msg.attach(MIMEText(corpo_final_email, 'plain'))
-
-        # Anexa os arquivos
-        for arquivo_path in anexos:
-            if os.path.exists(arquivo_path):
-                with open(arquivo_path, "rb") as attachment:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(attachment.read())
-                encoders.encode_base64(part)
-                part.add_header(
-                    "Content-Disposition",
-                    f"attachment; filename={os.path.basename(arquivo_path)}",
-                )
-                msg.attach(part)
-                output_widget.insert(tk.END, f"Arquivo '{os.path.basename(arquivo_path)}' anexado ao e-mail.\n")
-            else:
-                output_widget.insert(tk.END, f"Aviso: Arquivo '{os.path.basename(arquivo_path)}' não encontrado para anexar.\n")
-                logging.warning(f"Arquivo não encontrado para anexar: {arquivo_path}")
-
-        # Conecta e envia o email
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls() # Inicia a criptografia TLS
-            server.login(EMAIL_REMETENTE, SENHA_APLICATIVO_GMAIL) # Use a senha de aplicativo aqui
-            server.send_message(msg)
-
-        output_widget.insert(tk.END, f"Email com relatório(s) enviado para '{EMAIL_DESTINATARIO}'.\n")
-        logging.info(f"Email enviado com anexo(s): {anexos}")
-        return True
-    except smtplib.SMTPAuthenticationError as auth_e:
-        output_widget.insert(tk.END, f"Erro de autenticação SMTP: Verifique remetente e senha de aplicativo. {auth_e}\n")
-        logging.error(f"Erro de autenticação SMTP: {auth_e}")
-        messagebox.showerror("Erro de Email", f"Erro de autenticação: {auth_e}. Verifique seu email remetente e a senha de aplicativo.")
-        return False
-    except Exception as e:
-        output_widget.insert(tk.END, f"Erro ao enviar email: {e}\n")
-        logging.error(f"Erro ao enviar email: {e}")
-        messagebox.showerror("Erro de Email", f"Não foi possível enviar o email. Verifique suas credenciais e conexão: {e}")
-        return False
-
-# --- Função para verificar se o horário atual está dentro do horário comercial ---
-def is_within_working_hours():
+def horarioTrabalho(): #AQUIIII
     now = datetime.datetime.now()
-    is_weekday = 0 <= now.weekday() <= 4 # Segunda-feira (0) a Sexta-feira (4)
-    is_working_hour = 8 <= now.hour < 18 # Das 8h às 18h
+    is_weekday = 0 <= now.weekday() <= 4 
+   
+    is_working_hour = WORKING_HOURS_START_HOUR <= now.hour < WORKING_HOURS_END_HOUR
     return is_weekday and is_working_hour
 
-# --- Função Principal - Executa Consulta e Atualiza a GUI ---
-def executar_consulta_gui(output_widget, status_label, contador_label, progress_bar_fill, root):
-    global consulta_agendada_id, contador_agendado_id, executando_consultas
+def abrir_diretorio(caminho, tipo_diretorio, gui_instance):
+    abs_caminho = os.path.abspath(caminho)
+    if not os.path.exists(abs_caminho):
+        os.makedirs(abs_caminho)
+        app_logger.info(f"Diretório '{abs_caminho}' criado.")
+
+    sistema = platform.system()
+    try:
+        if sistema == "Windows":
+            os.startfile(abs_caminho)
+        elif sistema == "Darwin":
+            subprocess.Popen(["open", abs_caminho])
+        else:
+            subprocess.Popen(["xdg-open", abs_caminho])
+        app_logger.info(f"Diretório de {tipo_diretorio} aberto: '{abs_caminho}'")
+    except Exception as e:
+        if gui_instance:
+            gui_instance.master.after(0, lambda: messagebox.showerror("Erro", f"Não foi possível abrir a pasta de {tipo_diretorio}: {e}"))
+        app_logger.error(f"Não foi possível abrir a pasta de {tipo_diretorio} ('{abs_caminho}'): {e}", exc_info=True)
+
+def abrir_diretorio_relatorios():
+    if app_gui_instance:
+        abrir_diretorio(DIRETORIO_RELATORIOS, "relatórios", app_gui_instance)
+    else:
+        app_logger.warning("Instância da GUI não disponível para abrir diretório de relatórios.")
+
+def abrir_diretorio_logs():
+    if app_gui_instance:
+        abrir_diretorio(DIRETORIO_LOGS, "logs", app_gui_instance)
+    else:
+        app_logger.warning("Instância da GUI não disponível para abrir diretório de logs.")
+
+
+def _executar_consulta_logica(gui_instance_ref):
+    global executando_consultas, consulta_agendada_id
 
     if not executando_consultas:
+        app_logger.info("Consulta cancelada: Monitoramento foi parado.")
         return
 
-    # Verifica se está dentro do horário comercial antes de executar a consulta
-    if not is_within_working_hours():
-        msg = f"[{time.strftime('%H:%M:%S')}] Fora do horário comercial (Seg-Sex, 08h-18h). A consulta não será executada.\n"
-        output_widget.insert(tk.END, msg)
-        logging.info(msg.strip())
-        status_label.config(text="Status: Fora do horário comercial. Aguardando...")
-        
-        # Reagenda para o próximo intervalo, mesmo que não esteja executando consultas
-        root.after(INTERVALO_CONSULTA_MS, lambda: executar_consulta_gui(
-            output_widget, status_label, contador_label, progress_bar_fill, root
-        ))
-        # Inicia a atualização do contador para o próximo intervalo
-        root.after(INTERVALO_ATUALIZACAO_MS, lambda: atualizar_contador_e_barra(
-            contador_label, status_label, progress_bar_fill, root, INTERVALO_CONSULTA_MS
-        ))
-        return
+    gui_instance_ref.master.after(0, lambda: gui_instance_ref.update_status_labels_on_query_start())
 
-    output_widget.delete(1.0, tk.END)
-    status_label.config(text="Status: Iniciando consulta...")
-    
-    progress_bar_fill['value'] = 0
-    progress_bar_fill.stop()
-    
-    contador_label.config(text="Próximo em: --:--")
-
-    # Esta variável agora irá conter apenas o conteúdo tabelado para o e-mail
-    conteudo_tabelado_para_email = "" 
+    df_for_email = pd.DataFrame()
+    total_rows = 0
+    query_time = 0.0
+    email_sent_status = None
+    status_message_on_complete = "Status: Consulta finalizada."
 
     try:
+        if not horarioTrabalho():  #AQUIIIII
+            app_logger.info(f"Fora do horário comercial (Seg-Sex, {WORKING_HOURS_START_HOUR}h-{WORKING_HOURS_END_HOUR}h). A consulta não será executada.")
+            status_message_on_complete = "Status: Fora do horário comercial. Aguardando..."
+            gui_instance_ref.master.after(0, lambda: gui_instance_ref.update_status_labels_on_query_complete(
+                total_rows, query_time, None, status_message_on_complete
+            ))
+            
+            if executando_consultas:
+              
+                consulta_agendada_id = gui_instance_ref.master.after(GLOBAL_INTERVALO_CONSULTA_MS, lambda: iniciar_thread_consulta(gui_instance_ref))
+            return
+
         conn = conectdb()
         if conn is None:
-            messagebox.showerror("Erro de Conexão", "Falha ao conectar ao banco de dados.")
-            output_widget.insert(tk.END, 'Falha ao conectar ao banco de dados.')
-            status_label.config(text="Status: Conexão falhou.")
+            app_logger.error('Falha ao conectar ao banco de dados.')
+            status_message_on_complete = "Status: Conexão falhou."
+            gui_instance_ref.master.after(0, lambda: messagebox.showerror("Erro de Conexão", "Falha ao conectar ao banco de dados. Verifique o log."))
+            gui_instance_ref.master.after(0, lambda: gui_instance_ref.update_status_labels_on_query_complete(
+                total_rows, query_time, False, status_message_on_complete
+            ))
+            if executando_consultas:
+               
+                consulta_agendada_id = gui_instance_ref.master.after(GLOBAL_INTERVALO_CONSULTA_MS, lambda: iniciar_thread_consulta(gui_instance_ref))
             return
 
         cursor = conn.cursor()
-        
-        # Mantém a mensagem de início da consulta no console/log
-        inicio_consulta_msg = f'[{time.strftime("%H:%M:%S")}] Consulta Alerta Pobreza iniciada...\n'
-        output_widget.insert(tk.END, inicio_consulta_msg)
-        logging.info(inicio_consulta_msg.strip())
-        
-        status_label.config(text="Status: Executando consulta...")
+        app_logger.info("Consulta Alerta Pobreza iniciada...")
+        gui_instance_ref.master.after(0, lambda: gui_instance_ref.status_label.configure(text_color=COLOR_TEXT_WARNING, text="Status: Executando consulta SQL..."))
 
         t0 = time.time()
-        query = """
-                    SELECT XXXXX,XXXXX,XXXXX,XXXXX,XXXXX
-                    FROM XXXXXX
-                    WHERE 1=1
-                      AND SUBSTR(DATEMS, 1, 6) = TO_CHAR(CURRENT DATE, 'YYYYMM')
-                      AND XXXXX = 'XXX'
-                """
-
+       
+        query = SQL_QUERY_ALERTA  #QUERY
         cursor.execute(query)
 
         columns = [column[0] for column in cursor.description]
         rows = cursor.fetchall()
-
+        total_rows = len(rows)
         query_time = time.time() - t0
-        
-        # Mantém a mensagem de tempo e linhas no console/log
-        tempo_linhas_msg = f"Consulta executada em {query_time:.2f} segundos.\nTotal de linhas retornadas: {len(rows)}\n"
-        output_widget.insert(tk.END, tempo_linhas_msg)
-        logging.info(tempo_linhas_msg.strip())
 
-        output_widget.insert(tk.END, "\n--- Resultados da Consulta ---\n")
-        
-        if rows:
-            header_line = " | ".join(columns) + "\n"
-            separator_line = "-" * (sum(len(c) for c in columns) + (len(columns) - 1) * 3) + "\n"
+        app_logger.info(f"Consulta executada em {query_time:.2f} segundos. Total de linhas retornadas: {total_rows}")
+        gui_instance_ref.master.after(0, lambda: gui_instance_ref.status_label.configure(text_color=COLOR_TEXT_WARNING, text="Status: Processando resultados..."))
+
+        processed_rows_for_df = [list(row) for row in rows] if rows else []
+        df_resultados = pd.DataFrame(processed_rows_for_df, columns=columns)
+
+       
+        if 'DATA' in df_resultados.columns:
+            df_resultados['DATA'] = pd.to_datetime(df_resultados['DATA'], errors='coerce').dt.strftime('%d/%m/%y') 
+            df_resultados['DATA'] = df_resultados['DATA'].fillna('')
+
+
+        gui_instance_ref.master.after(0, lambda: gui_instance_ref.display_results(df_resultados.values.tolist(), df_resultados.columns.tolist()))
+
+        status_message_on_complete = f"Status: Consulta finalizada às {datetime.datetime.now().strftime('%H:%M:%S')}. {total_rows} linhas encontradas."
+
+        lista_anexos = []
+        if total_rows > 0:
+            app_logger.info("Resultados encontrados. Gerando e enviando relatório(s)...")
+
             
-            output_widget.insert(tk.END, header_line)
-            output_widget.insert(tk.END, separator_line)
-            
-            # Adiciona cabeçalho e separador ao conteúdo do e-mail
-            conteudo_tabelado_para_email += header_line
-            conteudo_tabelado_para_email += separator_line
-            
-            for row in rows:
-                row_line = " | ".join(map(str, row)) + "\n"
-                output_widget.insert(tk.END, row_line)
-                # Adiciona cada linha de resultado ao conteúdo do e-mail
-                conteudo_tabelado_para_email += row_line
-            
-            output_widget.insert(tk.END, "\nResultados encontrados. Gerando e enviando relatório(s)...\n")
-            
-            lista_anexos = []
-            
-            # Gera o relatório CSV (mantido do seu código original)
-            caminho_relatorio_csv = gerar_relatorio_csv(rows, columns, output_widget)
+            caminho_relatorio_csv = gerar_relatorio_csv(rows, columns) 
             if caminho_relatorio_csv:
                 lista_anexos.append(caminho_relatorio_csv)
 
-            if lista_anexos:
-                # Envia o e-mail com o conteúdo tabelado
-                enviar_email(lista_anexos, conteudo_tabelado_para_email, output_widget)
-            else:
-                output_widget.insert(tk.END, "Nenhum arquivo de relatório foi gerado para envio.\n")
-                logging.warning("Nenhum arquivo de relatório foi gerado para envio por email.")
+            
+            df_for_email = df_resultados
+            email_sent_status = send_email(
+                anexos=lista_anexos,
+                df_data_for_email=df_for_email,
+                total_rows_found=total_rows,
+                email_remetente=EMAIL_REMETENTE,
+                senha_aplicativo=SENHA_APPLICATIVO_GMAIL,
+                email_destinatario=EMAIL_DESTINATARIO,
+                assunto_email=ASSUNTO_EMAIL,
+                saudacao=gui_instance_ref.get_time_of_day_greeting() if gui_instance_ref else "Olá"
+            ) 
 
-        else: # Se não houver rows
-            nenhum_resultado_msg = "Nenhum resultado encontrado para a consulta.\n"
-            output_widget.insert(tk.END, nenhum_resultado_msg)
-            logging.info("Nenhum resultado encontrado. Nenhum relatório será gerado/enviado.")
-            # Se não houver resultados, o corpo do e-mail pode ser simplesmente uma mensagem de "nenhum resultado"
-            conteudo_tabelado_para_email = "Nenhum resultado com o erro 815 foi encontrado na consulta atual.\n"
-            enviar_email([], conteudo_tabelado_para_email, output_widget) # Envia email mesmo sem anexos se não houver erro
+        else:
+          app_logger.info("Nenhum resultado encontrado. Relatório e e-mail não serão enviados.")
+        gui_instance_ref.master.after(0, lambda: app_gui_instance.lbl_email_status_card.configure(
+        text="NÃO ENVIADO (Sem Dados)", text_color=COLOR_TEXT_WARNING
+    ))
 
         cursor.close()
         conn.close()
-        logging.info("Conexão com o banco de dados fechada.")
-        status_label.config(text=f"Status: Consulta finalizada às {time.strftime('%H:%M:%S')}. {len(rows)} linhas encontradas.")
+        app_logger.info("Conexão com o banco de dados fechada.")
 
     except Exception as e:
-        logging.error(f"Erro inesperado durante a consulta: {e}")
-        messagebox.showerror("Erro de Consulta", f"Ocorreu um erro: {e}")
-        error_msg = f"\n[{time.strftime('%H:%M:%S')}] Ocorreu um erro: {e}\n"
-        output_widget.insert(tk.END, error_msg)
-        # Adiciona a mensagem de erro ao corpo do e-mail, se ocorrer um erro na consulta
-        conteudo_tabelado_para_email = f"Ocorreu um erro durante a consulta: {e}\nPor favor, verifique o log para mais detalhes."
-        enviar_email([], conteudo_tabelado_para_email, output_widget) # Envia email com erro mesmo sem anexos
-        status_label.config(text="Status: Erro na consulta.")
+        app_logger.error(f"Erro inesperado durante a consulta: {e}", exc_info=True)
+        status_message_on_complete = "Status: Erro na consulta."
+        gui_instance_ref.master.after(0, lambda: messagebox.showerror("Erro de Consulta", f"Ocorreu um erro: {e}. Verifique o log."))
+        email_sent_status = send_email(
+            anexos=[],
+            df_data_for_email=pd.DataFrame(),
+            total_rows_found=0,
+            email_remetente=EMAIL_REMETENTE,
+            senha_aplicativo=SENHA_APPLICATIVO_GMAIL,
+            email_destinatario=EMAIL_DESTINATARIO,
+            assunto_email=ASSUNTO_EMAIL,
+            saudacao=gui_instance_ref.get_time_of_day_greeting() if gui_instance_ref else "Olá"
+        )
     finally:
-        if executando_consultas: # Reagenda apenas se o monitoramento estiver ativo
-            progress_bar_fill['value'] = 0
-            root.after(INTERVALO_ATUALIZACAO_MS, lambda: atualizar_contador_e_barra(
-                contador_label, status_label, progress_bar_fill, root, INTERVALO_CONSULTA_MS
-            ))
-            consulta_agendada_id = root.after(INTERVALO_CONSULTA_MS, lambda: executar_consulta_gui(
-                output_widget, status_label, contador_label, progress_bar_fill, root
-            ))
+        gui_instance_ref.master.after(0, lambda: gui_instance_ref.status_label.configure(text_color=COLOR_TEXT_PRIMARY, text="Status: Finalizando..."))
+        gui_instance_ref.master.after(500, lambda: gui_instance_ref.update_status_labels_on_query_complete(
+            total_rows, query_time, email_sent_status, status_message_on_complete
+        ))
+       
+        if executando_consultas:
+           
+            consulta_agendada_id = gui_instance_ref.master.after(GLOBAL_INTERVALO_CONSULTA_MS, lambda: iniciar_thread_consulta(gui_instance_ref))
 
-# --- Função para Atualizar Contador de Tempo e Barra de Progresso ---
-def atualizar_contador_e_barra(contador_label, status_label, progress_bar_fill, root, tempo_restante_ms):
+
+def iniciar_thread_consulta(gui_instance_ref):
+    global consulta_thread, consulta_agendada_id, contador_agendado_id, executando_consultas
+
+    if not executando_consultas:
+        app_logger.info("Não reagendando consulta/contador: Monitoramento foi parado.")
+        return
+
+   
+    if consulta_agendada_id:
+        gui_instance_ref.master.after_cancel(consulta_agendada_id)
+        consulta_agendada_id = None
+        app_logger.debug("Agendamento de consulta anterior cancelado.")
+    if contador_agendado_id:
+        gui_instance_ref.master.after_cancel(contador_agendado_id)
+        contador_agendado_id = None
+        app_logger.debug("Agendamento de contador anterior cancelado.")
+
+    app_logger.info("Agendando execução da próxima consulta e contador.")
+
+    if consulta_thread and consulta_thread.is_alive():
+        app_logger.info("Uma consulta já está em andamento. Não inicia nova thread.")
+        
+        gui_instance_ref.master.after(0, lambda: atualizar_contador_e_barra(
+            gui_instance_ref, GLOBAL_INTERVALO_CONSULTA_MS 
+        ))
+    else:
+        app_logger.info("Iniciando nova thread de consulta.")
+        consulta_thread = threading.Thread(target=_executar_consulta_logica, args=(gui_instance_ref,))
+        consulta_thread.daemon = True 
+        consulta_thread.start()
+
+       
+        gui_instance_ref.master.after(0, lambda: atualizar_contador_e_barra(
+            gui_instance_ref, GLOBAL_INTERVALO_CONSULTA_MS 
+        ))
+
+
+def atualizar_contador_e_barra(gui_instance_ref, tempo_restante_ms):
     global contador_agendado_id, executando_consultas
 
     if not executando_consultas:
         return
 
-    tempo_restante_ms -= INTERVALO_ATUALIZACAO_MS
+    tempo_restante_ms_next_step = max(0, tempo_restante_ms - INTERVALO_ATUALIZACAO_MS)
 
-    minutos = int(tempo_restante_ms / 1000 / 60)
-    segundos = int((tempo_restante_ms / 1000) % 60)
+    gui_instance_ref.master.after(0, lambda: gui_instance_ref.update_countdown_and_progress(tempo_restante_ms))
 
-    # Calcula o valor da barra de progresso (de 0 a 100)
-    progress_value = ((INTERVALO_CONSULTA_MS - tempo_restante_ms) / INTERVALO_CONSULTA_MS) * 100
-    progress_bar_fill['value'] = progress_value
-
-    if tempo_restante_ms > 0:
-        contador_label.config(text=f"Próximo em: {minutos:02d}:{segundos:02d}")
-        contador_agendado_id = root.after(INTERVALO_ATUALIZACAO_MS, lambda: atualizar_contador_e_barra(
-            contador_label, status_label, progress_bar_fill, root, tempo_restante_ms
+    if tempo_restante_ms_next_step > 0:
+        contador_agendado_id = gui_instance_ref.master.after(INTERVALO_ATUALIZACAO_MS, lambda: atualizar_contador_e_barra(
+            gui_instance_ref, tempo_restante_ms_next_step
         ))
     else:
-        contador_label.config(text="Próximo em: 00:00")
-        status_label.config(text="Status: Preparando nova consulta...")
+       
+        gui_instance_ref.master.after(0, lambda: gui_instance_ref.status_label.configure(text_color=COLOR_TEXT_WARNING, text="Status: Preparando nova consulta..."))
 
-# --- Funções de Controle para Iniciar/Parar ---
-def iniciar_consultas(output_widget, status_label, contador_label, progress_bar_fill, root, btn_alternar):
+
+def iniciar_monitoramento_logica(gui_instance_ref):
     global executando_consultas
+
     if executando_consultas:
+        app_logger.info("Tentativa de iniciar monitoramento já ativo. Ignorado.")
         return
 
     executando_consultas = True
-    btn_alternar.config(text="Parar Monitoramento")
-    status_label.config(text="Status: Monitoramento Iniciado. Agendando primeira consulta...")
-    output_widget.insert(tk.END, f'\n[{time.strftime("%H:%M:%S")}] Monitoramento Iniciado.\n')
-    
-    # Inicia a primeira execução e o contador
-    executar_consulta_gui(output_widget, status_label, contador_label, progress_bar_fill, root)
+    gui_instance_ref.master.after(0, lambda: gui_instance_ref.set_monitor_button_text("Parar Monitoramento"))
+    gui_instance_ref.master.after(0, lambda: gui_instance_ref.status_label.configure(text="Status: Monitoramento Iniciado. Agendando primeira consulta...", text_color=COLOR_TEXT_SUCCESS))
+    app_logger.info('Monitoramento Iniciado.')
 
-def parar_consultas(root, btn_alternar, status_label, contador_label, progress_bar_fill, output_widget):
+   
+    iniciar_thread_consulta(gui_instance_ref)
+
+
+def parar_monitoramento_logica(gui_instance_ref):
     global consulta_agendada_id, contador_agendado_id, executando_consultas
 
     if not executando_consultas:
+        app_logger.info("Tentativa de parar monitoramento já inativo. Ignorado.")
         return
 
     executando_consultas = False
-    btn_alternar.config(text="Iniciar Monitoramento")
-    status_label.config(text="Status: Monitoramento Parado.")
-    output_widget.insert(tk.END, f'\n[{time.strftime("%H:%M:%S")}] Monitoramento Parado.\n')
+    app_logger.info('Monitoramento Parado.')
 
-    # Cancela agendamentos pendentes
     if consulta_agendada_id:
-        root.after_cancel(consulta_agendada_id)
+        gui_instance_ref.master.after_cancel(consulta_agendada_id)
         consulta_agendada_id = None
+        app_logger.info("Agendamento de consulta cancelado.")
     if contador_agendado_id:
-        root.after_cancel(contador_agendado_id)
+        gui_instance_ref.master.after_cancel(contador_agendado_id)
         contador_agendado_id = None
-    
-    contador_label.config(text="Parado")
-    progress_bar_fill['value'] = 0
-    progress_bar_fill.stop()
+        app_logger.info("Agendamento de contador cancelado.")
 
-def alternar_monitoramento(output_widget, status_label, contador_label, progress_bar_fill, root, btn_alternar):
-    global executando_consultas
-    if executando_consultas:
-        parar_consultas(root, btn_alternar, status_label, contador_label, progress_bar_fill, output_widget)
+    gui_instance_ref.master.after(0, lambda: gui_instance_ref.reset_ui_on_stop())
+
+    if consulta_thread and consulta_thread.is_alive():
+        app_logger.warning("Uma consulta ainda está em andamento. Ela terminará e não reagendará.")
     else:
-        iniciar_consultas(output_widget, status_label, contador_label, progress_bar_fill, root, btn_alternar)
+        app_logger.info("Nenhuma consulta ativa para esperar.")
 
-# --- Função de Configuração da GUI ---
-def setup_gui():
-    root = ThemedTk(theme="black") # Mantém ThemedTk
-    root.title("Monitoramento Alerta Pobreza")
-    root.geometry("900x700")
+def alternar_monitoramento_callback():
+    global executando_consultas, app_gui_instance
 
-    fonte_padrao = ("Arial", 11)
-    fonte_contador = ("Consolas", 18, "bold")
-    fonte_resultado = ("Consolas", 10)
+    if app_gui_instance is None:
+        app_logger.error("Instância da GUI não disponível para alternar monitoramento.")
+        return
 
-    style = ttk.Style()
-    style.configure(".", font=fonte_padrao)
-    style.configure("TButton", padding=6)
-    style.map("TButton",
-              foreground=[('pressed', 'white'), ('active', 'lightblue')],
-              background=[('pressed', '!disabled', 'gray'), ('active', '#444444')])
+    if executando_consultas:
+        parar_monitoramento_logica(app_gui_instance)
+    else:
+        iniciar_monitoramento_logica(app_gui_instance)
 
-    style.configure("Horizontal.TProgressbar", background='lime green', troughcolor='darkgray', bordercolor='black')
+def main():
+    global app_gui_instance, GLOBAL_INTERVALO_CONSULTA_MS
 
-    control_frame = ttk.Frame(root, padding="10 10 10 10")
-    control_frame.pack(side=tk.TOP, fill=tk.X)
-
-    # Botão para alternar monitoramento (Iniciar/Parar)
-    btn_alternar = ttk.Button(control_frame, text="Iniciar Monitoramento",
-                              command=lambda: alternar_monitoramento(resultado_text, status_label, contador_label, progress_bar_fill, root, btn_alternar))
-    btn_alternar.pack(side=tk.LEFT, padx=5)
-
-    progress_bar_fill = ttk.Progressbar(control_frame, orient="horizontal", length=300, mode="determinate", style="Horizontal.TProgressbar")
-    progress_bar_fill.pack(side=tk.LEFT, padx=5)
-
-    contador_label = ttk.Label(control_frame, text="Próximo em: --:--", font=fonte_contador, foreground="lime green")
-    contador_label.pack(side=tk.LEFT, padx=(20, 5))
-
-    resultado_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=100, height=30,
-                                               font=fonte_resultado,
-                                               bg="#333333",
-                                               fg="#FFFFFF",
-                                               insertbackground="white",
-                                               selectbackground="#444444")
-    resultado_text.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
-
-    status_label = ttk.Label(root, text="Status: Monitoramento Iniciado Automaticamente.", anchor=tk.W,
-                             relief=tk.SUNKEN,
-                             padding=(5, 2),
-                             background="#222222",
-                             foreground="lightgray")
-    status_label.pack(side=tk.BOTTOM, fill=tk.X)
-
-    # --- Chamada para iniciar automaticamente ---
-    # Inicia o monitoramento logo após a GUI ser configurada
-    root.after(100, lambda: iniciar_consultas(resultado_text, status_label, contador_label, progress_bar_fill, root, btn_alternar))
     
+    ctk.set_appearance_mode("Dark")
+    ctk.set_default_color_theme("blue")
+
+    root = ctk.CTk()
+    root.title("Monitoramento Alerta Pobreza")
+    root.geometry("1200x800")
+    root.minsize(900, 600)
+    root.resizable(True, True)
+    
+   
+    app_gui_instance = AppGUI(
+        master=root,
+        toggle_monitor_callback=alternar_monitoramento_callback,
+        abrir_relatorios_callback=abrir_diretorio_relatorios,
+        abrir_logs_callback=abrir_diretorio_logs,
+        intervalo_consulta_ms=GLOBAL_INTERVALO_CONSULTA_MS,
+        intervalo_atualizacao_ms=INTERVALO_ATUALIZACAO_MS
+    )
+
+    
+    app_logger.addHandler(app_gui_instance._log_text_handler)
+
+    
+    current_log_file = datetime.datetime.now().strftime(os.path.join(DIRETORIO_LOGS, "app_log_%Y-%m-%d.log"))
+
+    if os.path.exists(current_log_file):
+        try:
+            with open(current_log_file, "r", encoding="utf-8", errors="replace") as f:
+             
+                log_lines = f.readlines()
+                for line in log_lines:
+                 
+                    level = logging.INFO
+                    if "[ERROR]" in line.upper():
+                        level = logging.ERROR
+                    elif "[WARNING]" in line.upper():
+                        level = logging.WARNING
+                    app_gui_instance.log_queue.put((line, level)) 
+            app_gui_instance.log_text.see(ctk.END)
+        except Exception as e:
+            app_gui_instance.log_text.insert(ctk.END, f"[ERRO] Falha ao carregar log: {e}\n")
+            app_logger.error(f"[ERRO] Falha ao carregar log para a GUI: {e}", exc_info=True)
+
+    
+    root.after(500, app_gui_instance.start_auto_monitor)
+
     root.mainloop()
 
-# --- Bloco Principal - Inicia a GUI ---
 if __name__ == "__main__":
-    setup_gui()
+    main()

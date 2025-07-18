@@ -22,5 +22,5 @@ Quando os registros são encontrados (ou mesmo que não sejam), o sistema gera u
 
 👩‍💻 Desenvolvido por
 Stefany Rodrigues  | Felipe Amaral
-📧 rodriguestefany98@gmail.com
+
 
