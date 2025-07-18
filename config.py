@@ -1,7 +1,7 @@
 # --- CONFIGURAÇÕES DE E-MAIL ---
-EMAIL_REMETENTE = 'rodriguestefany98@gmail.com'
-SENHA_APPLICATIVO_GMAIL = 'wqlf ylft acow dmsa' 
-EMAIL_DESTINATARIO = 'stefany.rodrigues@nagem.com.br, desenvolvimentosuporte@nagem.com.br'   #  augusto.mendes@nagem.com.br, wedici.lins@nagem.com.br, felipe.amaral@nagem.com.br'
+EMAIL_REMETENTE = '******@gmail.com'
+SENHA_APPLICATIVO_GMAIL = '**** **** **** ****' 
+EMAIL_DESTINATARIO = '*********@email.com.br
 ASSUNTO_EMAIL = "Alerta Pobreza - Notas com Erro 815"
 CORPO_EMAIL_FIXO = """
 Prezado(a),
@@ -13,40 +13,44 @@ Na última consulta, foram encontrados os seguintes resultados:
 
 #query
 
-SQL_QUERY_ALERTA = """
+-- Exemplo de query SQL para consulta de documentos fiscais com status específico
+-- Essa query é fictícia e serve apenas para fins demonstrativos
+
+SQL_QUERY_EXEMPLO = """
 SELECT
-    IDFEMP AS LOJA,
-    FNGCHARTODATE(DATEMS) AS DATA,
-    NOTFIC AS "NOTA FISCAL",
-    CODFIC AS " CODIGO FISCAL",
-    STAPRE AS "STATUS PROCESSAMENTO",
-    CASE IDFCLIFNC
+    ID_EMPRESA AS LOJA,
+    CONVERTE_DATA(DT_EMISSAO) AS DATA,
+    NUM_DOCUMENTO AS "NOTA FISCAL",
+    COD_DOCUMENTO AS "CÓDIGO FISCAL",
+    STATUS_PROC AS "STATUS PROCESSAMENTO",
+    CASE TIPO_PESSOA
         WHEN 'C' THEN 'Cliente'
         WHEN 'B' THEN 'B2C'
         WHEN 'F' THEN 'Fornecedor'
         WHEN 'T' THEN 'Transportadora'
     END AS TIPO,
-    CASE TPOEMSNFE
+    CASE TIPO_EMISSAO
         WHEN 1 THEN 'Normal'
         WHEN 2 THEN 'SCAN'
         WHEN 3 THEN 'DPEC'
         WHEN 4 THEN 'FS'
         WHEN 5 THEN 'FS-DA'
     END AS EMISSAO
-FROM CONOTD0M
+FROM TABELA_DOCUMENTOS
 WHERE
-    DATEMS >= TO_CHAR(CURRENT DATE, 'YYYYMM') || '01'
-    AND DATEMS <= TO_CHAR(LAST_DAY(CURRENT DATE), 'YYYYMMDD')
-    AND STAPRE = '815'
+    DT_EMISSAO >= TO_CHAR(CURRENT_DATE, 'YYYYMM') || '01'
+    AND DT_EMISSAO <= TO_CHAR(LAST_DAY(CURRENT_DATE), 'YYYYMMDD')
+    AND STATUS_PROC = '815'
 """
+
 
 
 # --- CONFIGURAÇÕES DE BANCO DE DADOS ---
 DB_DRIVER = '{Client Access ODBC Driver (32-bit)}'
 DB_SYSTEM = '10.1.0.2'
-DB_UID = 'CLAUDIO'
-DB_PWD = '19957'
-DB_DEFAULT_LIBRARIES = 'NAG0001'
+DB_UID = '******'
+DB_PWD = '*****'
+DB_DEFAULT_LIBRARIES = '******'
 
 # --- CONFIGURAÇÕES GERAIS ---
 DIRETORIO_RELATORIOS = 'relatorios' 
