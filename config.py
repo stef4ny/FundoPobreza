@@ -1,7 +1,7 @@
 # --- CONFIGURAÇÕES DE E-MAIL ---
 EMAIL_REMETENTE = '******@gmail.com'
 SENHA_APPLICATIVO_GMAIL = '**** **** **** ****' 
-EMAIL_DESTINATARIO = '*********@email.com.br
+EMAIL_DESTINATARIO = '*********@gmail.com.br
 ASSUNTO_EMAIL = "Alerta Pobreza - Notas com Erro 815"
 CORPO_EMAIL_FIXO = """
 Prezado(a),
@@ -46,8 +46,8 @@ WHERE
 
 
 # --- CONFIGURAÇÕES DE BANCO DE DADOS ---
-DB_DRIVER = '{Client Access ODBC Driver (32-bit)}'
-DB_SYSTEM = '10.1.0.2'
+DB_DRIVER = '{C**** Access *** ****** (32-bit)}'
+DB_SYSTEM = 'localhost'
 DB_UID = '******'
 DB_PWD = '*****'
 DB_DEFAULT_LIBRARIES = '******'
@@ -63,3 +63,4 @@ EMAIL_MAX_ROWS_DISPLAY = 10
 
 WORKING_HOURS_START_HOUR = 8  
 WORKING_HOURS_END_HOUR = 18
+
