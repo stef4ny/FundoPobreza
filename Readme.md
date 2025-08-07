@@ -18,9 +18,10 @@ Quando os registros são encontrados (ou mesmo que não sejam), o sistema gera u
 
 🧪 Botão de "Forçar Consulta Agora" manual
 
-
+##
 
 👩‍💻 Desenvolvido por
 Stefany Rodrigues  | Felipe Amaral
+
 
 
