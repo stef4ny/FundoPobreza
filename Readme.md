@@ -1,4 +1,4 @@
-# Monitoramento de Alerta - ERRO 815 (wRodaCupom)
+# Monitoramento de Alerta - ERRO 815 
 
 
 <img width="839" height="845" alt="FundoPobreza" src="https://github.com/user-attachments/assets/81a301bb-7ece-477a-9122-39f487354027" />
@@ -27,6 +27,7 @@ Quando os registros são encontrados (ou mesmo que não sejam), o sistema gera u
 
 👩‍💻 Desenvolvido por
 Stefany Rodrigues  | Felipe Amaral
+
 
 
 
